@@ -1,0 +1,683 @@
+# Complete Codebase Audit & JavaScript-to-TypeScript Migration Assessment
+**Project Name:** Ek Jyot (formerly Divine Sangam)  
+**Audit Date:** October 27, 2026  
+**Auditor:** Senior Software Architect, TypeScript Migration Specialist, Full-Stack QA & Security Lead  
+**Assessment Target:** `D:\EkJyot`  
+**Execution Mode:** Read-Only Audit & Non-Mutating Verification  
+
+---
+
+## 1. Executive Summary
+
+This comprehensive audit was conducted on the **Ek Jyot** codebase located at `D:\EkJyot`. The primary objective is to evaluate the technical feasibility, architectural readiness, risks, and implementation roadmap for migrating the codebase from JavaScript to TypeScript prior to expanding core business logic and preparing the platform for multi-country international deployment.
+
+### Key Audit Findings
+
+1. **Repository Topology:**
+   - The directory `D:\EkJyot` is **not** a monorepo workspace. It contains three completely independent Git repositories:
+     - `admin/ekjyot_admin` (`https://github.com/codemathub/divinesangam_admin.git`)
+     - `backend/ekjyot_backend` (`https://github.com/codemathub/divinesangam_back.git`)
+     - `frontend/ekjyot_frontend` (`https://github.com/codemathub/divinesangam_front.git`)
+     - An abandoned build folder `frontend/divinesangam_front/.next` is also present.
+   - There is **no shared package manager** (no Turborepo, pnpm workspaces, or npm workspaces), no root configuration, and no shared code or contract layer between frontend, admin, and backend.
+
+2. **React Native Mobile Codebase Status (NOT VERIFIED):**
+   - The project specification mentions a React Native mobile application.
+   - **Verification Finding:** Exhaustive disk inspection across `D:\EkJyot` and the root drive `D:\` confirmed that **no React Native or mobile codebase exists in this repository**. The mobile codebase is marked as **NOT VERIFIED / NOT PRESENT IN REPOSITORY**. Contract sharing and typing recommendations are designed so the upcoming mobile application can immediately consume shared TypeScript schemas.
+
+3. **Current Completion vs UI Status:**
+   - The user interface is approximately **80% complete** across both user frontend (28 pages/routes) and admin portal (33 pages/routes).
+   - Overall platform business logic completion is approximately **30%**:
+     - The Express backend exposes **140 API endpoints** across 20 feature modules. However, only **39 endpoints** (27.8%) have explicit runtime validation schemas (`zod`).
+     - In the admin portal, six core dashboard and vendor analytics routes bypass the Express backend entirely and consume local Next.js mock data (`admin/ekjyot_admin/lib/mock-data.js`).
+     - There are **ZERO automated tests** across all three repositories (0 unit tests, 0 integration tests, 0 E2E tests).
+
+4. **Framework & Tooling Inconsistencies:**
+   - **Frontend:** Next.js `16.2.10`, React `19.2.4`, Tailwind CSS `v4`, React Compiler enabled.
+   - **Admin:** Next.js `14.2.35`, React `18.3.1`, Tailwind CSS `v3.4.6`. DevDependencies has `@types/react: 19.2.17` installed alongside React 18, creating a critical typing version conflict.
+   - **Backend:** Express `5.2.1`, Prisma `7.8.0`, PostgreSQL, Node.js CommonJS (`require()`), Zod `4.4.3`.
+
+5. **International Production Readiness Blockers:**
+   - **Localization:** 0 i18n libraries configured; all text strings are hardcoded in English.
+   - **Currency:** Indian Rupee (`₹`, `Rs.`, `INR`) is hardcoded in 39 UI files and in database defaults (`currency: "INR"`).
+   - **Phone Validation:** Hardcoded regex `/^[6-9]\d{9}$/` in backend validation rejects all international numbers outside India.
+   - **Geolocation & Mapping:** Dependent on `Ola Maps` (`api.olamaps.io`), which has no coverage outside India.
+   - **Payments & Payouts:** Domestic Indian payment gateways only (`RAZORPAY`, `PHONEPE`, `PAYTM`, `OFFLINE`). Payouts require `IFSC` code and `NEFT` banking methods.
+   - **Timezones:** All 94 database DateTime fields are defined as PostgreSQL `timestamp without time zone` (no `@db.Timestamptz`), posing severe scheduling and audit risks across multiple time zones.
+
+6. **Migration Recommendation:**
+   - A **bulk conversion is strictly discouraged**. Migrating blindly without test harnesses will break existing UI interactions and introduce silent runtime regressions.
+   - A phased, contract-driven migration order is recommended:
+     1. Baseline Test Harness & Git branch stabilization.
+     2. Shared Contracts Package (`@ekjyot/contracts`) using Zod + TypeScript types.
+     3. Backend Domain Services & Controllers migration.
+     4. Frontend UI Component & API Client typing (component-by-component).
+     5. Admin Portal typing & mock-data phaseout.
+     6. Multi-country schema adaptation & Mobile integration.
+
+---
+
+## 2. Verified Project Architecture
+
+```
+D:\EkJyot\
+│
+├── .agents/                                # AI agent workspace rules and skills
+│   ├── rules/                              # Gravitas and Ponytail rules
+│   └── skills/                             # Custom agent workflows
+│
+├── admin/
+│   └── ekjyot_admin/                       # NEXT.JS 14 ADMIN PORTAL (Git Repo 1)
+│       ├── app/                            # App Router (33 routes/pages)
+│       │   ├── api/                        # Mock API routes (dashboard, vendors)
+│       │   └── (dashboard & entity routes) # Bookings, Artists, Payouts, CMS...
+│       ├── components/                     # 18 component feature folders (152 .jsx files)
+│       ├── lib/                            # Axios API client, Zustand stores, mock data
+│       ├── package.json                    # Next 14.2.35, React 18.3.1, TanStack Query/Table
+│       └── jsconfig.json                   # Path alias: @/* -> ./*
+│
+├── backend/
+│   └── ekjyot_backend/                     # NODE.JS / EXPRESS 5 BACKEND (Git Repo 2)
+│       ├── app.js                          # Express app, CORS, CookieParser, error handlers
+│       ├── server.js                       # Server entry point (HTTP listener)
+│       ├── config/                         # Prisma Client instance, AWS S3 Client
+│       ├── middleware/                     # authMiddleware, validateRequest, errorHandler
+│       ├── modules/api/web/                # 20 Domain Feature Modules:
+│       │   ├── artists/                    # Artist profiles, status lifecycle
+│       │   ├── auth/                       # JWT auth, email OTP, refresh token
+│       │   ├── blog/                       # Blog management & views
+│       │   ├── booking/                    # Devotee bookings & pricing calculation
+│       │   ├── cms/                        # Hero, FAQ, dynamic section management
+│       │   ├── event/                      # Devotee event requests
+│       │   ├── festival/                   # Festival listings & relations
+│       │   ├── locations/                  # States and Cities lookup
+│       │   ├── maps/                       # Ola Maps reverse geocoding & place search
+│       │   ├── payout/                     # Vendor payout accounting (NEFT/IFSC)
+│       │   ├── permissions/                # RBAC user module permissions
+│       │   ├── providers/                  # Vendor/Provider onboarding & services
+│       │   ├── report/                     # Platform analytics & statistics
+│       │   ├── review/                     # Devotee reviews & moderation
+│       │   ├── service/                    # Services catalog & pricing
+│       │   ├── serviceCategory/            # Category taxonomy
+│       │   ├── setting/                    # Platform fees, GST, notifications
+│       │   ├── support/                    # Helpdesk support tickets & replies
+│       │   ├── upload/                     # S3 presigned URLs & direct upload
+│       │   └── users/                      # User management & profile updates
+│       ├── prisma/
+│       │   ├── schema.prisma               # 43 models, 16 enums (PostgreSQL)
+│       │   ├── migrations/                 # 27 applied SQL migrations
+│       │   └── seed.js                     # Initial database seeding
+│       └── package.json                    # Express 5.2.1, Prisma 7.8.0, Zod 4.4.3
+│
+├── frontend/
+│   ├── divinesangam_front/                 # Abandoned build artifacts (.next only)
+│   └── ekjyot_frontend/                    # NEXT.JS 16 USER FRONTEND (Git Repo 3)
+│       ├── src/
+│       │   ├── app/                        # App Router (28 routes/pages)
+│       │   ├── components/                 # 12 component categories (19 .jsx, 95 .js files)
+│       │   ├── context/                    # React Context providers (auth, theme)
+│       │   └── lib/                        # Fetch API client (silent refresh), auth state
+│       ├── next.config.mjs                 # React Compiler enabled, S3 image remotes
+│       ├── package.json                    # Next 16.2.10, React 19.2.4, Tailwind v4
+│       └── jsconfig.json                   # Path alias: @/* -> ./src/*
+│
+└── AGENTS.md / GEMINI.md                   # Workspace agent governance documents
+```
+
+---
+
+## 3. Repository and Source-File Inventory
+
+### 3.1 Source File Distribution by Extension
+
+The file scan excluded build outputs (`.next`, `out`, `dist`), dependencies (`node_modules`), VCS folders (`.git`), binary assets (`uploads`), and `.claude` directories.
+
+| Sub-Project | `.js` | `.jsx` | `.ts` | `.tsx` | `.mjs` | `.json` | `.prisma` / `.sql` | `.css` | Media Assets (`.svg`/`.jpg`) | Other Config / Docs | Total Files |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`ekjyot_admin`** | 69 | 152 | 1 (`next-env.d.ts`) | 0 | 0 | 4 | 0 | 1 | 37 | 4 (`.md`, `.local`, `.example`) | **268** |
+| **`ekjyot_backend`** | 80 | 0 | 1 (`prisma.config.ts`) | 0 | 0 | 2 | 29 (1 prisma, 28 sql) | 0 | 0 | 9 (`.md`, `.dump`, `.toml`, no-ext) | **121** |
+| **`ekjyot_frontend`** | 95 | 19 | 0 | 0 | 3 | 3 | 0 | 1 | 42 | 6 (`.md`, `.local`, no-ext) | **169** |
+| **React Native Mobile** | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0 (NOT PRESENT)** |
+| **Workspace Total** | **244** | **171** | **2** | **0** | **3** | **9** | **29** | **2** | **79** | **19** | **558** |
+
+### 3.2 Non-Migratable, Generated, and Third-Party Files
+
+1. **`backend/ekjyot_backend/prisma/migrations/*`**: 27 historical SQL migration directories. These are immutable database change logs and must **not** be modified or converted.
+2. **`backend/ekjyot_backend/ekjyot_backup.dump`**: Uncommitted binary database dump (88KB). Must be added to `.gitignore` and kept out of version control.
+3. **`frontend/divinesangam_front/`**: Orphaned folder containing only a stale `.next` cache. Should be safely purged to reclaim disk space.
+4. **`admin/ekjyot_admin/next-env.d.ts`**: Auto-generated Next.js ambient declaration file. Managed by Next.js compiler.
+5. **Asset files (`*.svg`, `*.jpg`, `*.ico`)**: 79 static graphic files located in `public/` directories.
+
+---
+
+## 4. Current Application Health
+
+### 4.1 Safe Execution Verification Log
+
+All checks were executed in standard, non-mutating mode using existing installed binaries. No packages were installed or modified.
+
+| Target | Command Executed | Status | Exit Code | Verified Output / Error Summary | Pre-existing Issue? |
+| :--- | :--- | :---: | :---: | :--- | :---: |
+| **Backend** | `prisma validate` | **PASS** | 0 | Schema loaded from `prisma/schema.prisma`. Schema is valid. | No |
+| **Frontend** | `eslint .` | **FAIL** | 1 | **38 problems (9 errors, 29 warnings)**. Errors: `react-hooks/set-state-in-effect` (calling `setState` synchronously within `useEffect` bodies in React 19). Warnings: `@next/next/no-img-element`. | **Yes (Pre-existing)** |
+| **Admin** | `eslint .` (Node CLI) | **HANG / TIMEOUT** | N/A | Process stalled scanning 221 JS/JSX files due to ESLint 8 Next.js plugin directory walking. Cancelled safely. | **Yes (Pre-existing)** |
+| **Backend** | `npm test` | **FAIL** | 1 | `Error: no test specified`. Zero test suites configured. | **Yes (Pre-existing)** |
+| **Frontend** | `npm test` | **N/A** | N/A | No `test` script defined in `package.json`. | **Yes (Pre-existing)** |
+| **Admin** | `npm test` | **N/A** | N/A | No `test` script defined in `package.json`. | **Yes (Pre-existing)** |
+
+### 4.2 Git Status and Working Tree State
+
+None of the three repositories are currently in a clean Git state. There are critical uncommitted changes in active feature branches:
+
+1. **`ekjyot_backend` (`main` branch):**
+   - Modified: `app.js`, `server.js`, `middleware/authMiddleware.js`, `middleware/optionalAuth.js`, `modules/api/web/auth/*`, `prisma/schema.prisma`, `utils/generateToken.js`, `package.json`.
+   - Untracked: `ekjyot_backup.dump`.
+   - *Risk:* Beginning migration on top of uncommitted backend authentication modifications will cause merge conflicts and obscure whether bugs were introduced by migration or by prior edits.
+
+2. **`ekjyot_frontend` (`main` branch):**
+   - Modified: `src/lib/api-client.js`, `src/lib/auth-api.js`, `src/lib/auth.js`, `src/app/vendors/[slug]/page.js`, `src/components/common/Header.js`.
+   - Deleted: `AGENTS.md`, `CLAUDE.md`.
+   - Untracked: `src/context/`.
+   - *Risk:* Incomplete authentication context rewrite currently in progress.
+
+3. **`ekjyot_admin` (`main` branch):**
+   - Modified: `.env.example`, `package.json`, `package-lock.json`.
+
+---
+
+## 5. TypeScript Migration Readiness
+
+### 5.1 Next.js Frontend (`ekjyot_frontend`)
+
+- **Current Adoption:** 0% TypeScript (`95 .js`, `19 .jsx`).
+- **Framework Stack:** Next.js `16.2.10`, React `19.2.4`, `@tailwindcss/postcss` `v4`.
+- **Compiler Compatibility:** Next.js 16 natively supports TypeScript without Babel overrides.
+- **Required Type Packages:**
+  - `typescript` (`^5.7.0`)
+  - `@types/node` (`^20.0.0` or `^22.0.0`)
+  - `@types/react` (`^19.0.0`)
+  - `@types/react-dom` (`^19.0.0`)
+- **JSX/TSX Configuration:** Requires `"jsx": "preserve"` in `tsconfig.json`.
+- **Path Aliases:** Existing `jsconfig.json` defines `"@/*": ["./src/*"]`. Directly translates to `tsconfig.json`.
+- **Critical Dynamic Patterns:**
+  - `src/lib/api-client.js`: Implements dynamic request wrappers with un-typed response promises.
+  - `src/context/`: Un-typed React context states relying on implicit window globals (`window.location.assign`).
+  - React 19 hook violations (`set-state-in-effect`) must be resolved before strict TypeScript builds will pass in CI.
+
+### 5.2 Next.js Admin Portal (`ekjyot_admin`)
+
+- **Current Adoption:** 0.4% (`next-env.d.ts` exists, but 221 source files are `.js`/`.jsx`).
+- **Framework Stack:** Next.js `14.2.35`, React `18.3.1`, Tailwind `v3.4.6`.
+- **CRITICAL VERSION CONFLICT:**
+  - `admin/ekjyot_admin/package.json` specifies `"react": "^18.3.1"`, but `devDependencies` has `"@types/react": "19.2.17"`.
+  - Installing React 19 types into a React 18 project causes catastrophic type errors during `tsc` compilation (e.g., changes to `ReactElement`, `useRef`, `useActionState`, and event handler signatures).
+  - *Fix Required:* Revert `@types/react` and `@types/react-dom` to `^18.3.0`.
+- **Third-Party Libraries Typing:**
+  - `@hugeicons/react` (`^1.1.9`): Weak or missing prop types in earlier versions.
+  - `@tanstack/react-table` (`^8.19.3`): Highly generic TypeScript library. Migrating tables from JS to TS requires explicit `ColumnDef<TData, TValue>` interfaces for all 33 entity views.
+  - `recharts` (`^2.12.7`): Tooltip and payload formatting functions require strict typing.
+
+### 5.3 Node.js / Express Backend (`ekjyot_backend`)
+
+- **Current Adoption:** 0.8% (`prisma.config.ts` exists for Prisma CLI, but runtime is 100% CommonJS JavaScript).
+- **Framework Stack:** Express `5.2.1`, Prisma `7.8.0`, PostgreSQL, Node `20+`.
+- **Required Dependencies:**
+  - `typescript` (`^5.7.0`)
+  - `@types/node` (`^20.0.0`)
+  - `@types/express` (`^5.0.0`)
+  - `@types/cors`, `@types/cookie-parser`, `@types/jsonwebtoken`, `@types/bcrypt`, `@types/multer`, `@types/nodemailer`, `@types/pg`
+  - Runtime execution tooling: `tsx` or `ts-node` for local development, `tsc` for production build output.
+- **Express 5 Request Augmentation:**
+  - In `middleware/authMiddleware.js`, custom properties are attached directly: `req.user = { userId, role, ... }` and `req.token = token`.
+  - In TypeScript, Express requires declaration merging:
+    ```typescript
+    declare global {
+      namespace Express {
+        interface Request {
+          user?: AuthenticatedUser;
+          token?: string;
+        }
+      }
+    }
+    ```
+- **Zod Version & Interoperability:** Backend uses `zod: ^4.4.3`. Zod schemas already exist in `*.validation.js` files and can be used immediately with `z.infer<typeof Schema>` to generate compile-time types.
+
+### 5.4 React Native Mobile Application
+
+- **Current Adoption:** **NOT VERIFIED / NOT PRESENT IN REPOSITORY**.
+- **Prerequisites for Launch:**
+  - Must be created with TypeScript by default (`npx react-native init` or Expo TypeScript template).
+  - Should consume the shared contract package `@ekjyot/contracts` rather than duplicating types.
+
+---
+
+## 6. Frontend UI Preservation Assessment
+
+Because approximately 80% of the UI design and layout is complete, preserving visual fidelity, responsiveness, and existing user flows is paramount.
+
+### 6.1 Route and Component Inventory
+
+| Category | Routes / Pages | Key UI Components | High-Risk Interactive Behaviors |
+| :--- | :--- | :--- | :--- |
+| **Devotee Discovery** | `/`, `/search`, `/services`, `/services/[slug]`, `/festivals` | `Header`, `HeroSection`, `Services`, `PopularProviders`, `FaqSection` | Dynamic search query params, Swiper carousels, responsive mobile menu drawer |
+| **Artist / Vendor Profiles** | `/artists`, `/artists/[id]`, `/artists/all`, `/vendors/[slug]` | `ArtistCard`, `VendorProfileHeader`, `ServicesOfferedList`, `ReviewList` | Dynamic slug resolution, image galleries, tabbed navigation, review submission dialogs |
+| **Devotee Dashboard** | `/dashboard`, `/dashboard/bookings`, `/dashboard/favourites`, `/dashboard/profile`, `/dashboard/settings` | `DashboardShell`, `MyBookings`, `ProfileForm`, `FavouriteCards` | Protected route guard, booking cancellation modals, real-time status badges |
+| **Auth & Onboarding** | `/login`, `/signup`, `/signup/professional`, `/forgot-password`, `/join`, `/become-a-provider` | `LoginForm`, `RegisterForm`, `OtpInput`, `MultiStepVendorForm` | Multi-step form state, OTP countdown timers, client-side cookie storage |
+| **Content & Legal** | `/about`, `/faq`, `/blog`, `/contact`, `/how-it-works`, `/terms`, `/privacy-policy`, `/refund-policy` | `FaqContent`, `PrivacyContent`, `TermsContent`, `LatestArticles` | CMS-driven rich text rendering, collapsible accordions, SEO metadata |
+
+### 6.2 UI Regression Prevention Strategy
+
+To ensure zero visual or functional degradation during migration:
+
+1. **No Layout Rewrites:** Never convert CSS classes or change DOM hierarchy during TypeScript conversion. Type only the component props, hooks, and handler signatures.
+2. **Prop Typing Rule:** Maintain existing prop interfaces:
+   ```typescript
+   interface LayoutShellProps {
+     children: React.ReactNode;
+     showHeader?: boolean;
+     showFooter?: boolean;
+   }
+   ```
+3. **Component-by-Component Isolated Conversion:**
+   - Step 1: Convert leaf presentational components (`Button`, `Badge`, `Card`, `Modal`).
+   - Step 2: Convert composite layout containers (`Header`, `Footer`, `Sidebar`).
+   - Step 3: Convert stateful form components (`LoginForm`, `MultiStepVendorForm`).
+   - Step 4: Convert Next.js page components (`page.tsx`) and layout boundaries.
+4. **Visual Regression Gate:** Introduce Playwright screenshot tests for the top 10 highest-traffic pages (`/`, `/services`, `/vendors/[slug]`, `/dashboard/bookings`) before and after each conversion batch.
+
+---
+
+## 7. Backend and API Contract Audit
+
+The Express backend exposes **140 REST endpoints** across 20 modules mounted at `/api/web` and `/api/v1`.
+
+### 7.1 Representative Endpoint Audit Sample
+
+| HTTP Method & Route | Module & Handler File | Request Parameters / Body | Runtime Validation | Auth & RBAC | Services / Models Used | Contract Status |
+| :--- | :--- | :--- | :---: | :--- | :--- | :---: |
+| `POST /auth/register` | `auth.route.js` -> `auth.controller.register` | Body: `{ name, email, phone, password, role }` | **Zod Schema** (`auth.validation.js`) | Public | `User`, `OtpCode`, `bcrypt`, Nodemailer | **Verified** |
+| `POST /auth/login` | `auth.route.js` -> `auth.controller.login` | Body: `{ identifier, password }` (email or phone) | **Zod Schema** | Public | `User`, `RefreshToken`, JWT sign | **Verified** |
+| `POST /auth/refresh` | `auth.route.js` -> `auth.controller.refreshToken` | Cookie: `user_refresh_token` or Body: `{ refreshToken }` | None | Public (Token-based) | `RefreshToken`, `User` | **Verified** |
+| `GET /auth/profile` | `auth.route.js` -> `auth.controller.getProfile` | None | None | `authMiddleware` | `User` | **Verified** |
+| `POST /booking` | `booking.route.js` -> `booking.controller.createBooking` | Body: `{ devotee, service, dateTime, additional }` | None (Controller un-validated) | Public / Optional | `Booking`, `Provider`, `Service`, `User` | **Verified** |
+| `GET /booking` | `booking.route.js` -> `booking.controller.getBookings` | Query: `{ status, page, limit }` | None | `authMiddleware` | `Booking`, `Payment` | **Verified** |
+| `PATCH /booking/:id/status` | `booking.route.js` -> `booking.controller.updateBookingStatus` | Params: `id`, Body: `{ status }` | None | `authMiddleware` (Admin/Vendor) | `Booking`, `ActivityLog` | **Verified** |
+| `POST /providers/admin/create_vendor`| `providers.route.js` -> `providers.controller.createVendor`| Multipart/form-data: `{ personal, business, services, bank, documents }`| **Zod Schema** (`providers.validation.js`)| `authMiddleware` (Admin) | `Provider`, `User`, `ProviderBankAccount`, S3 | **Verified** |
+| `GET /providers/lists` | `providers.route.js` -> `providers.controller.getProviders` | Query: `{ page, limit, search, status, categoryId }` | None | `authMiddleware` | `Provider`, `City`, `State` | **Verified** |
+| `GET /providers/detail/:id` | `providers.route.js` -> `providers.controller.getProviderById` | Params: `id` (Supports numeric ID or `VNDxxxx` slug) | None | Public | `Provider`, `ProviderService`, `Review` | **Verified** |
+| `POST /artists/admin/create_artist` | `artists.route.js` -> `artists.controller.createArtist` | Multipart: `{ name, bio, experience, awards, files }` | **Zod Schema** | `authMiddleware` (Admin) | `Artist`, `ArtistDocument`, S3 | **Verified** |
+| `PATCH /artists/admin/:id/approve` | `artists.route.js` -> `artists.controller.approveArtist` | Params: `id`, Body: `{ remarks }` | **Zod Schema** | `authMiddleware` (Admin) | `Artist`, `ArtistStatusHistory` | **Verified** |
+| `GET /maps/geocode` | `maps.route.js` -> `maps.controller.geocodeAddress` | Query: `{ address }` | None | `authMiddleware` | External `Ola Maps API` | **Verified** |
+| `GET /locations/states` | `locations.route.js` -> `locations.controller.listStates` | None | None | Public | `State`, `City` | **Verified** |
+| `POST /payout/request` | `payout.route.js` -> `payout.controller.requestPayout` | Body: `{ providerId, amount, bookingIds }` | **Zod Schema** | `authMiddleware` (Vendor) | `Payout`, `ProviderBankAccount` | **Verified** |
+
+### 7.2 API Inconsistencies & Contract Drift
+
+1. **Client Envelope Divergence:**
+   - The backend standard envelope (`utils/response.js`) returns:
+     `{ success: boolean, status: boolean, statusCode: number, message: string, data: T }`.
+   - `frontend/ekjyot_frontend/src/lib/api-client.js` unwraps this and returns the entire JSON body.
+   - `admin/ekjyot_admin/lib/api-client.js` uses Axios, returning `AxiosResponse<T>`, meaning callers must access `res.data.data`.
+2. **Missing Backend Validation on 72.2% of Endpoints:**
+   - 101 of the 140 endpoints have **no Zod validation schema**. Handlers access raw `req.body`, `req.query`, and `req.params` without sanitization or type assertions.
+   - Example: In `booking.controller.js`, `createBooking(req.body)` passes unvalidated nested objects directly to the service layer.
+3. **Silent Failure in Mock vs Real Data (Admin):**
+   - The admin portal queries `/api/dashboard/activities` and `/api/vendors/stats`, which hit internal Next.js mock route handlers returning fake data (`lib/mock-data.js`), while other admin pages query the real Express backend.
+
+---
+
+## 8. PostgreSQL and Data Layer
+
+### 8.1 Prisma ORM Configuration
+
+- **ORM:** Prisma `7.8.0` with `@prisma/adapter-pg` and `pg: ^8.21.0`.
+- **Datasource:** PostgreSQL (`prisma/schema.prisma`).
+- **Models:** 43 entity models.
+- **Enums:** 16 database enums (`Role`, `BookingStatus`, `PaymentStatus`, `ServiceStatus`, `PaymentGateway`, etc.).
+- **Migrations:** 27 migrations tracked in `prisma/migrations/`.
+
+### 8.2 Database Type Risks & TypeScript Mappings
+
+1. **Monetary Precision & Prisma.Decimal (19 Fields):**
+   - 19 columns are defined as `@db.Decimal(10, 2)` or `@db.Decimal(12, 2)` (e.g., `Booking.totalAmount`, `Booking.serviceAmount`, `Payment.amount`, `Payout.amount`).
+   - *Risk:* Prisma client generates these fields as `Prisma.Decimal` (from `decimal.js`). Over HTTP JSON serialization (`res.json()`), they serialize as strings or numbers. In the frontend and admin, calculations like `booking.totalAmount + tax` result in string concatenation bugs (`"500" + 50 = "50050"`) unless explicitly cast.
+   - *Mitigation:* Define shared DTOs that explicitly type monetary fields as `number` (or string for high-precision transfers) and serialize them via backend transformer helpers.
+2. **Missing Timezone Storage (94 DateTime Fields):**
+   - All 94 `DateTime` fields use standard Prisma `DateTime`, which creates `timestamp(3) without time zone` in PostgreSQL.
+   - *Risk:* Multi-country deployment across time zones will lead to booking date corruption when comparing client local times against server times.
+3. **Lack of International Geographic Entity:**
+   - `State` and `City` tables have no `Country` model or country code relation.
+   - Addresses in `User`, `Booking`, and `ProviderLocation` rely on Indian `pincode` (6 digits) without international postal code support.
+
+---
+
+## 9. International Production Readiness
+
+| Category | Current Implementation | Confirmed Defects & Missing Features | Architectural Recommendation |
+| :--- | :--- | :--- | :--- |
+| **Localization (i18n)** | Hardcoded English in all 558 files. | Zero i18n infrastructure. Cannot support multilingual deployment (Hindi, Punjabi, Spanish, French, etc.). | Install `next-intl` on Frontend and Admin. Extract UI strings into `messages/{locale}.json`. |
+| **Currency** | Hardcoded Rupee (`₹`, `Rs.`, `INR`) in 39 UI files; `currency String @default("INR")`. | Hardcoded domestic currency prevents billing in USD, CAD, GBP, EUR, AUD. | Introduce multi-currency tables, exchange rate engine, and `Intl.NumberFormat` abstraction. |
+| **Phone Validation** | Backend regex: `/^[6-9]\d{9}$/`. | Rejects any non-Indian phone number at registration and checkout. | Migrate to `google-libphonenumber` / `validator.isMobilePhone(val, 'any')` with E.164 formatting (`+1...`, `+44...`). |
+| **Mapping & Geocoding** | Tied directly to `api.olamaps.io` (`OLA_MAPS_API_KEY`). | Ola Maps does not support geocoding or places outside India. | Implement a Provider Adapter pattern: `MapProviderService` with Google Maps / Mapbox for global traffic. |
+| **Payment Gateways** | `RAZORPAY`, `PHONEPE`, `PAYTM`, `OFFLINE`. | Indian domestic payment processors only. International credit cards frequently fail on domestic Indian gateways. | Add `STRIPE` and `PAYPAL` to `PaymentGateway` enum and backend webhook processors. |
+| **Payouts & Banking** | Requires `IFSC` code and `NEFT` method. | International vendors/artists cannot receive payouts via Indian domestic clearing networks. | Introduce IBAN, SWIFT/BIC, and Stripe Connect / Wise for cross-border payouts. |
+| **Timezone Management** | Hardcoded `en-IN` date format in backend (`booking.service.js`); DB timestamps lack TZ. | Hardcoded IST formatting causes incorrect booking times for devotees and vendors abroad. | Store all timestamps as UTC (`@db.Timestamptz`). Format in the browser using the devotee's local timezone. |
+| **Data Privacy & Compliance** | Single PostgreSQL instance with no data residency partitions. | Non-compliant with GDPR (Europe), CCPA (California), or DPDP Act (India) for cross-border data residency. | Establish clear data retention policies, user consent tracking, and localized cloud storage buckets. |
+
+---
+
+## 10. Testing and Quality Assurance
+
+### 10.1 Existing Testing Baseline
+
+```
+Unit Tests:                0
+Integration Tests:         0
+API Endpoint Tests:        0
+E2E Tests:                 0
+Component Tests:           0
+React Native Tests:        0
+Visual Regression Tests:   0
+Coverage Reports:          None
+CI/CD Automated Testing:   None
+```
+
+### 10.2 Recommended Testing Gates Prior to Migration
+
+No migration PR should be merged without satisfying the following minimum automated verification gates:
+
+```mermaid
+flowchart TD
+    A["Pull Request Opened"] --> B["Pre-Commit Hook: lint-staged & prettier"]
+    B --> C["Gate 1: tsc --noEmit (0 Type Errors)"]
+    C --> D["Gate 2: ESLint (0 Errors, 0 Warnings)"]
+    D --> E["Gate 3: Vitest Unit & DTO Contract Tests"]
+    E --> F["Gate 4: Supertest API Integration Suite"]
+    F --> G["Gate 5: Playwright UI Visual Regression (Diff < 0.1%)"]
+    G --> H["Ready for Review & Merge"]
+```
+
+---
+
+## 11. Migration Risk Assessment
+
+| Risk | Affected Application / Files | Likelihood | Impact | Evidence from Codebase | Recommended Mitigation |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| **UI Visual & Behavioral Regressions** | `frontend/ekjyot_frontend/src/components/*` (114 files), `admin/ekjyot_admin/components/*` (221 files) | **High** | **Critical** | Complex UI with Framer Motion, Swiper, and custom tailwind sheets. Zero automated tests exist. | Do not touch JSX structure during conversion. Convert files leaf-first with Playwright visual snapshots. |
+| **React 19 / Compiler Lint Violations Blocking Build** | `frontend/ekjyot_frontend/src/app/*` (9 files) | **Critical** | **High** | `eslint .` fails with 9 `react-hooks/set-state-in-effect` errors. Next.js 16 build will abort in strict mode. | Refactor synchronous `setState` in `useEffect` to use callbacks or derive state during render before converting to TS. |
+| **Type Conflict in Admin (React 18 vs React 19 Types)** | `admin/ekjyot_admin/package.json` | **Critical** | **High** | `"react": "^18.3.1"` is paired with `"@types/react": "19.2.17"`. `tsc` will fail immediately. | Downgrade devDependencies to `@types/react@^18.3.0` and `@types/react-dom@^18.3.0`. |
+| **Unvalidated API Payload Deserialization** | `backend/ekjyot_backend/modules/api/web/*` (101 unvalidated endpoints) | **High** | **High** | 72.2% of backend routes accept unvalidated `req.body`, causing silent runtime errors on unexpected types. | Create Zod validation schemas for all 101 remaining endpoints before writing backend TypeScript interfaces. |
+| **Prisma.Decimal vs Number Precision Mismatches** | `backend/modules/api/web/booking/*`, `payment/*`, `payout/*` | **High** | **High** | 19 Decimal fields serialize inconsistently, leading to `NaN` or string concatenation in UI calculations. | Implement explicit Decimal-to-number transformation DTOs in the shared contract library. |
+| **Authentication & Refresh Token State Drift** | `frontend/src/lib/api-client.js`, `admin/lib/api-client.js`, `backend/middleware/authMiddleware.js` | **Medium** | **Critical** | Frontend uses native `fetch` with single-flight silent refresh; Admin uses Axios with immediate 401 redirect. | Standardize API clients on a single typed client package (`@ekjyot/api-client`). |
+| **International Number Rejection** | `backend/modules/api/web/auth/auth.validation.js` | **High** | **Critical** | Regex `/^[6-9]\d{9}$/` strictly limits phone numbers to 10 Indian digits. | Replace with E.164 international phone validation before onboarding global users. |
+| **Broken Next.js Mock Routes in Admin** | `admin/ekjyot_admin/app/api/*` | **Medium** | **Medium** | 6 admin views consume mock data instead of Express backend. | Migrate mock endpoints to real Express backend endpoints before typing admin tables. |
+| **Premature Monorepo Restructuring Blast Radius** | Root `D:\EkJyot` (3 separate Git repos) | **Medium** | **High** | Forcing all three repos into a monorepo in one step risks losing Git commit histories and disrupting Coolify deployments. | Use npm/pnpm workspaces locally or keep repos separate while publishing contracts via private npm/GitHub Packages. |
+
+---
+
+## 12. Prioritized Migration Roadmap
+
+```mermaid
+flowchart LR
+    P0["Phase 0: Baseline & Hygiene"] --> P1["Phase 1: Shared Contracts"]
+    P1 --> P2["Phase 2: Express Backend"]
+    P2 --> P3["Phase 3: User Frontend"]
+    P3 --> P4["Phase 4: Admin Portal"]
+    P4 --> P5["Phase 5: Mobile & Global Readiness"]
+```
+
+### Phase 0: Hygiene, Pre-migration Stabilization & Test Baseline
+- **Objective:** Stabilize existing working trees, fix dependency conflicts, resolve existing ESLint errors, and establish automated test harnesses.
+- **Affected Files:**
+  - `backend/ekjyot_backend/package.json` (add Vitest, Supertest)
+  - `frontend/ekjyot_frontend/package.json` (fix React 19 hook violations, add Playwright)
+  - `admin/ekjyot_admin/package.json` (downgrade `@types/react` to `^18.3.0`)
+- **Prerequisites:** Commit or stash all existing uncommitted Git modifications.
+- **Benefits:** Prevents migration from breaking existing working features; establishes verified baseline.
+- **Acceptance Criteria:** `prisma validate` passes, `eslint .` passes with 0 errors across all projects, baseline Playwright snapshots recorded.
+- **Rollback Approach:** Revert to clean Git commit hash.
+
+### Phase 1: Shared Contracts Package (`@ekjyot/contracts`)
+- **Objective:** Create a single source of truth for all API requests, responses, entity DTOs, enums, and error formats.
+- **Affected Files:** New package `packages/contracts` (or published npm package).
+- **Prerequisites:** Phase 0 complete.
+- **Expected Benefits:** Guarantees compile-time type safety across backend, web frontend, admin, and the future React Native app. Eliminates contract drift.
+- **Risks:** Scope creep in trying to type undocumented endpoints.
+- **Validation:** `tsc --noEmit` and Vitest schema validation tests.
+- **Acceptance Criteria:** Zod schemas and TypeScript types exported for Auth, Bookings, Providers, Artists, and Payments.
+
+### Phase 2: Node.js / Express Backend Migration
+- **Objective:** Migrate Express backend to TypeScript with strict type checking and 100% Zod validation coverage.
+- **Affected Files:** `backend/ekjyot_backend/` (80 `.js` files -> `.ts`).
+  1. `config/` and `utils/` (`response.ts`, `ApiError.ts`, `fileUrl.ts`).
+  2. `middleware/` (`authMiddleware.ts`, `validateRequest.ts`, `errorHandler.ts`).
+  3. Domain services & controllers (Module-by-module: `auth`, `locations`, `serviceCategory`, `services`, `providers`, `artists`, `booking`, `payout`).
+  4. Routes and `app.ts` / `server.ts`.
+- **Prerequisites:** Phase 1 complete.
+- **Acceptance Criteria:** `tsc --noEmit` compiles with zero errors under `"strict": true`. All 140 endpoints verified via Supertest integration tests.
+- **Rollback Approach:** Module-by-module Git commit reverts.
+
+### Phase 3: Next.js User Frontend Migration (`ekjyot_frontend`)
+- **Objective:** Incrementally convert user frontend from JavaScript to TypeScript without modifying visual presentation.
+- **Affected Files:** `frontend/ekjyot_frontend/src/` (114 files).
+  1. Setup `tsconfig.json` with `"allowJs": true`, `"checkJs": false`.
+  2. Leaf components: `src/components/common/*`, `src/components/ui/*`.
+  3. API Client & Auth Context: `src/lib/api-client.ts`, `src/context/AuthContext.tsx`.
+  4. Composite sections: `src/components/home/*`, `src/components/services/*`, `src/components/artists/*`.
+  5. Dashboard: `src/components/dashboard/*`.
+  6. Next.js App Router Pages: `src/app/**/page.tsx`.
+- **Prerequisites:** Phase 2 backend running and typed.
+- **Acceptance Criteria:** `tsc --noEmit` passes. Visual regression tests show 0% unexpected layout deviation.
+- **Rollback Approach:** Individual page and component Git checkout.
+
+### Phase 4: Next.js Admin Portal Migration (`ekjyot_admin`)
+- **Objective:** Align React 18 types, replace mock routes with real Express backend integrations, and convert admin tables and forms to TypeScript.
+- **Affected Files:** `admin/ekjyot_admin/` (221 files).
+  1. Align `@types/react` to React 18.
+  2. Decommission `lib/mock-data.js` and `app/api/*` mock routes; connect to typed backend endpoints.
+  3. Type TanStack tables with `ColumnDef<T>` using shared contract types.
+  4. Convert components and pages to `.tsx`.
+- **Prerequisites:** Phase 1 and Phase 2 complete.
+- **Acceptance Criteria:** All 33 admin pages compile without type errors and fetch live data from Express backend.
+
+### Phase 5: React Native Mobile Onboarding & International Production Hardening
+- **Objective:** Initialize the React Native application using shared contracts; implement multi-country localization, international phone validation, global payments, and UTC timestamps.
+- **Tasks:**
+  1. Initialize React Native with TypeScript and import `@ekjyot/contracts`.
+  2. Database migration: alter DateTime columns to `TIMESTAMPTZ(3)`.
+  3. Integrate `next-intl` on frontend/admin and `i18next` on React Native.
+  4. Replace Ola Maps with a multi-provider adapter (Google Maps / Mapbox).
+  5. Add Stripe and PayPal payment gateways alongside Razorpay.
+
+---
+
+## 13. Recommended Dependencies and Configuration Changes
+
+### 13.1 Root / Shared Package Setup
+```bash
+# Recommended workspace setup (pnpm or npm workspaces)
+# packages/contracts/package.json
+{
+  "name": "@ekjyot/contracts",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
+```
+
+### 13.2 Backend Dependencies (`ekjyot_backend`)
+```bash
+# Dependencies to add (devDependencies only)
+npm install --save-dev typescript @types/node @types/express@^5.0.0 @types/cors @types/cookie-parser @types/jsonwebtoken @types/bcrypt @types/multer @types/nodemailer @types/pg tsx vitest supertest
+```
+
+#### Recommended `backend/tsconfig.json`
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["src/**/*", "prisma/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+### 13.3 Frontend Dependencies (`ekjyot_frontend`)
+```bash
+# Dependencies to add
+npm install --save-dev typescript @types/node @types/react@^19.0.0 @types/react-dom@^19.0.0 @playwright/test
+```
+
+#### Recommended `frontend/tsconfig.json`
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "**/*.js", "**/*.jsx"],
+  "exclude": ["node_modules"]
+}
+```
+
+### 13.4 Admin Dependencies (`ekjyot_admin`)
+```bash
+# Downgrade mismatched React 19 types to React 18:
+npm install --save-dev typescript @types/react@^18.3.0 @types/react-dom@^18.3.0 @types/node
+```
+
+---
+
+## 14. Safe Validation Commands
+
+Use only the following safe, non-mutating commands to verify application health during the assessment:
+
+### Backend Checks
+```powershell
+# 1. Validate Prisma schema syntax without connecting to live database
+cd D:\EkJyot\backend\ekjyot_backend
+.\node_modules\.bin\prisma.cmd validate
+
+# 2. Dry-run TypeScript compiler check (once tsconfig.json is added)
+.\node_modules\.bin\tsc.cmd --noEmit
+```
+
+### Frontend Checks
+```powershell
+# 1. Run ESLint across frontend without auto-fixing
+cd D:\EkJyot\frontend\ekjyot_frontend
+.\node_modules\.bin\eslint.cmd .
+
+# 2. Dry-run TypeScript check (once tsconfig.json is added)
+.\node_modules\.bin\tsc.cmd --noEmit
+```
+
+### Admin Checks
+```powershell
+# 1. Run Next.js lint check
+cd D:\EkJyot\admin\ekjyot_admin
+npm run lint
+
+# 2. Dry-run TypeScript check
+.\node_modules\.bin\tsc.cmd --noEmit
+```
+
+---
+
+## 15. Unverified Areas and Missing Information
+
+In strict adherence to the audit protocol, the following areas could not be verified from the local workspace files and are explicitly classified:
+
+1. **React Native Mobile Codebase:**
+   - **Status:** **NOT VERIFIED / NOT PRESENT ON DISK**.
+   - Neither `D:\EkJyot` nor other drives contain mobile source code, Expo configurations, or iOS/Android native projects.
+2. **Live Production Database State:**
+   - **Status:** **NOT VERIFIED**.
+   - No queries were run against live PostgreSQL databases. Production table indexes, actual row counts, and data volumes were inferred strictly from `schema.prisma` and the 27 SQL migration files.
+3. **External Cloud Services & Credentials:**
+   - **Status:** **NOT VERIFIED**.
+   - AWS S3 bucket permissions, Nodemailer SMTP production deliverability, Google OAuth Client validity, and Ola Maps API quotas were not verified to prevent external side effects and protect credentials.
+4. **Third-Party Payment Webhooks:**
+   - **Status:** **NOT VERIFIED**.
+   - Real Razorpay / PhonePe / Paytm webhook signatures and payment callbacks could not be tested without live sandbox or production gateway credentials.
+
+---
+
+## 16. Recommended Immediate Next Step
+
+**Do NOT begin migrating JavaScript files to TypeScript immediately.**
+
+The immediate next step is **Git Branch Hygiene and Test Harness Setup**:
+1. Commit or stash all existing uncommitted modifications across `backend`, `frontend`, and `admin` on dedicated feature branches (e.g., `pre-migration-baseline`).
+2. Resolve the 9 pre-existing React 19 hook errors in `ekjyot_frontend` so `eslint .` passes cleanly.
+3. Align the `@types/react` version in `ekjyot_admin` with React 18.
+4. Establish the `@ekjyot/contracts` package structure before renaming a single `.js` file to `.ts`.
+
+---
+
+## The 5 Most Important Decisions Required Before Migration
+
+Before writing any TypeScript code or renaming files, project leadership must make the following five strategic decisions:
+
+1. **Repository Architecture: Multi-Repo vs Turborepo / pnpm Workspace Monorepo**
+   - *The Decision:* Will the project continue operating as three separate Git repositories (requiring a published private npm package for shared contracts), or should the three repositories be consolidated into a modern Monorepo (Turborepo/pnpm) so frontend, admin, mobile, and backend share contracts directly via workspace dependencies?
+   - *Architect Recommendation:* Consolidate into a Turborepo monorepo. This eliminates version desynchronization of API contracts between web, admin, and mobile.
+
+2. **React Native Mobile Strategy & Inception**
+   - *The Decision:* Given that the mobile app does not currently exist in the repository, should it be scaffolded immediately in TypeScript as part of the new monorepo, or deferred until after the web frontend and backend are fully migrated?
+   - *Architect Recommendation:* Scaffold the mobile application now in TypeScript inside the monorepo so it builds against `@ekjyot/contracts` from day one, avoiding a double migration later.
+
+3. **International Database Schema Overhaul: Timestamps, Currency, and Countries**
+   - *The Decision:* Will the database schema be updated now to support multi-country expansion (migrating all 94 DateTime columns to `TIMESTAMPTZ`, adding a `Country` model, and supporting multi-currency), or will the platform launch in India first and refactor for international deployment later?
+   - *Architect Recommendation:* Migrate timestamps to `TIMESTAMPTZ` and add the `Country` entity *now* before developing remaining business logic. Changing timestamp columns after millions of bookings are recorded is high-risk.
+
+4. **Decommissioning Admin Portal Mock Data Routes**
+   - *The Decision:* Should the 6 mock API routes in the admin portal (`admin/ekjyot_admin/lib/mock-data.js`) be replaced with live Express backend endpoints before migrating the admin UI to TypeScript?
+   - *Architect Recommendation:* Yes. Migrating mock data routes to TypeScript is wasted engineering effort. Wire them directly to the real backend endpoints first.
+
+5. **Phased Module-by-Module Migration vs Feature Freeze**
+   - *The Decision:* Will the engineering team institute a temporary feature freeze while executing Phase 1 (Contracts) and Phase 2 (Backend), or must feature development continue concurrently with the migration?
+   - *Architect Recommendation:* Institute a brief feature freeze for the data and auth layer while Phase 1 and Phase 2 are implemented. Allow UI work to proceed only after leaf components and contract packages are merged.
+
+---
+*Report generated strictly in analysis mode. No project files, dependencies, or database schemas were modified.*
+
